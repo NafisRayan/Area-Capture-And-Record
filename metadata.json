@@ -1,0 +1,5 @@
+{
+  "name": "Area Capture & Record",
+  "description": "A powerful browser-based tool to select, capture, and record specific screen areas with real-time annotations.",
+  "requestFramePermissions": ["display-capture", "microphone", "camera", "fullscreen"]
+}
