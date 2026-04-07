@@ -350,6 +350,7 @@ export default function App() {
     }
     setIsRecording(false);
     setMode('ready');
+    setAnnotations([]);
   };
 
   // --- Screenshot Logic ---
@@ -443,6 +444,7 @@ export default function App() {
     a.href = url;
     a.download = `screenshot-${Date.now()}.png`;
     a.click();
+    setAnnotations([]);
   };
 
   // --- Render Helpers ---
