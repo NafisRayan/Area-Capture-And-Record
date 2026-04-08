@@ -46,6 +46,27 @@ interface Annotation {
   text?: string;
 }
 
+// --- Toast Component ---
+
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 50, x: "-50%" }}
+      animate={{ opacity: 1, y: 0, x: "-50%" }}
+      exit={{ opacity: 0, y: 20, x: "-50%" }}
+      className="fixed bottom-24 left-1/2 bg-zinc-800 border border-white/10 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 z-[100]"
+    >
+      <Check className="w-5 h-5 text-green-500" />
+      <span className="text-sm font-medium">{message}</span>
+    </motion.div>
+  );
+}
+
 // --- Main Component ---
 
 export default function App() {
@@ -70,6 +91,8 @@ export default function App() {
   const [color, setColor] = useState('#ef4444');
   const [brushSize, setBrushSize] = useState(4);
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
+  const [toast, setToast] = useState<string | null>(null);
+  const [buttonFeedback, setButtonFeedback] = useState<{ copy: string; save: string }>({ copy: 'Copy', save: 'Save' });
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -446,6 +469,9 @@ export default function App() {
     a.download = `screenshot-${Date.now()}.png`;
     a.click();
     setAnnotations([]);
+    setToast('Screenshot saved successfully!');
+    setButtonFeedback(prev => ({ ...prev, save: 'Saved' }));
+    setTimeout(() => setButtonFeedback(prev => ({ ...prev, save: 'Save' })), 2000);
   };
 
   const copyToClipboard = async () => {
@@ -457,6 +483,10 @@ export default function App() {
           await navigator.clipboard.write([
             new ClipboardItem({ 'image/png': blob })
           ]);
+          setAnnotations([]);
+          setToast('Copied to clipboard!');
+          setButtonFeedback(prev => ({ ...prev, copy: 'Copied' }));
+          setTimeout(() => setButtonFeedback(prev => ({ ...prev, copy: 'Copy' })), 2000);
         }
       }, 'image/png');
     } catch (err) {
@@ -845,14 +875,14 @@ export default function App() {
                         className="flex items-center gap-2 px-4 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-2xl font-semibold transition-all"
                       >
                         <Copy className="w-4 h-4" />
-                        Copy
+                        {buttonFeedback.copy}
                       </button>
                       <button
                         onClick={downloadAnnotated}
                         className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold transition-all"
                       >
                         <Download className="w-4 h-4" />
-                        Save
+                        {buttonFeedback.save}
                       </button>
                       <button
                         onClick={() => setMode('ready')}
@@ -874,6 +904,10 @@ export default function App() {
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-600/10 blur-[120px] rounded-full" />
       </div>
+
+      <AnimatePresence>
+        {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      </AnimatePresence>
     </div>
   );
 }
