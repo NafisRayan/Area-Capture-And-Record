@@ -9,9 +9,10 @@ import {
   Video, 
   Square, 
   StopCircle, 
-  Download, 
-  Trash2, 
-  MousePointer2, 
+  Download,
+  Copy,
+  Trash2,
+  MousePointer2,
   Pencil, 
   Type, 
   ArrowUpRight, 
@@ -447,6 +448,23 @@ export default function App() {
     setAnnotations([]);
   };
 
+  const copyToClipboard = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    try {
+      canvas.toBlob(async (blob) => {
+        if (blob) {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]);
+        }
+      }, 'image/png');
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+      setError('Failed to copy to clipboard. Your browser may not support this feature.');
+    }
+  };
+
   // --- Render Helpers ---
 
   const renderCurrentSelection = () => {
@@ -813,7 +831,7 @@ export default function App() {
                   <div className="w-px h-8 bg-white/10 mx-1" />
 
                   {mode === 'recording' ? (
-                    <button 
+                    <button
                       onClick={stopRecording}
                       className="flex items-center gap-2 px-6 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-semibold transition-all"
                     >
@@ -822,14 +840,21 @@ export default function App() {
                     </button>
                   ) : (
                     <>
-                      <button 
+                      <button
+                        onClick={copyToClipboard}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-2xl font-semibold transition-all"
+                      >
+                        <Copy className="w-4 h-4" />
+                        Copy
+                      </button>
+                      <button
                         onClick={downloadAnnotated}
                         className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold transition-all"
                       >
                         <Download className="w-4 h-4" />
                         Save
                       </button>
-                      <button 
+                      <button
                         onClick={() => setMode('ready')}
                         className="p-2.5 hover:bg-white/10 text-zinc-400 hover:text-white rounded-2xl transition-all"
                       >
