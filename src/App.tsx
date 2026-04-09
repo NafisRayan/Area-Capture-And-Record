@@ -8,6 +8,7 @@ import {
   Camera, 
   Video, 
   Square, 
+  Circle,
   StopCircle, 
   Download,
   Copy,
@@ -34,8 +35,15 @@ interface Area {
   height: number;
 }
 
+interface VideoMapping {
+  displayX: number;
+  displayY: number;
+  displayWidth: number;
+  displayHeight: number;
+}
+
 type Mode = 'idle' | 'selecting' | 'ready' | 'recording' | 'editing';
-type Tool = 'pen' | 'rect' | 'arrow' | 'text' | 'eraser';
+type Tool = 'pen' | 'rect' | 'circle' | 'arrow' | 'text' | 'eraser';
 
 interface Annotation {
   id: string;
@@ -77,6 +85,7 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [captureSize, setCaptureSize] = useState<{ width: number; height: number } | null>(null);
   
   const [error, setError] = useState<string | null>(null);
   
@@ -247,16 +256,56 @@ export default function App() {
 
   // --- Recording Logic (Approach A: Canvas Cropping) ---
 
+  const getVideoMapping = (video: HTMLVideoElement): VideoMapping => {
+    const containerWidth = video.clientWidth;
+    const containerHeight = video.clientHeight;
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+
+    const scale = Math.min(containerWidth / videoWidth, containerHeight / videoHeight);
+    const displayWidth = videoWidth * scale;
+    const displayHeight = videoHeight * scale;
+
+    return {
+      displayX: (containerWidth - displayWidth) / 2,
+      displayY: (containerHeight - displayHeight) / 2,
+      displayWidth,
+      displayHeight,
+    };
+  };
+
+  const mapSelectedAreaToVideoPixels = (selectedArea: Area, video: HTMLVideoElement): Area | null => {
+    const mapping = getVideoMapping(video);
+    const minX = mapping.displayX;
+    const maxX = mapping.displayX + mapping.displayWidth;
+    const minY = mapping.displayY;
+    const maxY = mapping.displayY + mapping.displayHeight;
+
+    const left = Math.max(selectedArea.x, minX);
+    const right = Math.min(selectedArea.x + selectedArea.width, maxX);
+    const top = Math.max(selectedArea.y, minY);
+    const bottom = Math.min(selectedArea.y + selectedArea.height, maxY);
+
+    if (right <= left || bottom <= top) return null;
+
+    return {
+      x: ((left - mapping.displayX) / mapping.displayWidth) * video.videoWidth,
+      y: ((top - mapping.displayY) / mapping.displayHeight) * video.videoHeight,
+      width: ((right - left) / mapping.displayWidth) * video.videoWidth,
+      height: ((bottom - top) / mapping.displayHeight) * video.videoHeight,
+    };
+  };
+
   const startRecording = () => {
     if (!stream || !area || !videoRef.current) return;
 
     const video = videoRef.current;
-    const scaleX = video.videoWidth / video.clientWidth;
-    const scaleY = video.videoHeight / video.clientHeight;
+    const sourceArea = mapSelectedAreaToVideoPixels(area, video);
+    if (!sourceArea) return;
 
     const cropCanvas = document.createElement('canvas');
-    cropCanvas.width = area.width * scaleX;
-    cropCanvas.height = area.height * scaleY;
+    cropCanvas.width = Math.round(sourceArea.width);
+    cropCanvas.height = Math.round(sourceArea.height);
     const ctx = cropCanvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
@@ -268,10 +317,18 @@ export default function App() {
       canvasStream.addTrack(audioTracks[0]);
     }
 
-    const recorder = new MediaRecorder(canvasStream, {
-      mimeType: 'video/webm;codecs=vp9',
-      videoBitsPerSecond: 10000000 // 10 Mbps
-    });
+    const mimeType = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ].find((type) => MediaRecorder.isTypeSupported(type));
+
+    const recorder = new MediaRecorder(
+      canvasStream,
+      mimeType
+        ? { mimeType, videoBitsPerSecond: 10000000 }
+        : { videoBitsPerSecond: 10000000 }
+    );
 
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => chunks.push(e.data);
@@ -282,6 +339,7 @@ export default function App() {
       a.href = url;
       a.download = `recording-${Date.now()}.webm`;
       a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setRecordedChunks([]);
     };
 
@@ -301,7 +359,7 @@ export default function App() {
         // Draw the cropped video frame at source resolution
         ctx.drawImage(
           video,
-          area.x * scaleX, area.y * scaleY, area.width * scaleX, area.height * scaleY,
+          sourceArea.x, sourceArea.y, sourceArea.width, sourceArea.height,
           0, 0, cropCanvas.width, cropCanvas.height
         );
 
@@ -312,20 +370,21 @@ export default function App() {
           allAnnotations.forEach(ann => {
             annCtx.strokeStyle = ann.color;
             annCtx.fillStyle = ann.color;
-            annCtx.lineWidth = ann.size * scaleX;
+            const strokeScale = ((cropCanvas.width / area.width) + (cropCanvas.height / area.height)) / 2;
+            annCtx.lineWidth = ann.size * strokeScale;
             annCtx.lineCap = 'round';
             annCtx.lineJoin = 'round';
             annCtx.beginPath();
 
             const adjust = (p: { x: number; y: number }) => ({
-              x: (p.x - area.x) * scaleX,
-              y: (p.y - area.y) * scaleY
+              x: ((p.x - area.x) / area.width) * cropCanvas.width,
+              y: ((p.y - area.y) / area.height) * cropCanvas.height
             });
 
             if (ann.type === 'pen' || ann.type === 'eraser') {
               if (ann.type === 'eraser') {
                 annCtx.globalCompositeOperation = 'destination-out';
-                annCtx.lineWidth = ann.size * 2 * scaleX;
+                annCtx.lineWidth = ann.size * 2 * strokeScale;
               } else {
                 annCtx.globalCompositeOperation = 'source-over';
               }
@@ -340,10 +399,19 @@ export default function App() {
               const start = adjust(ann.points[0]);
               const end = adjust(ann.points[ann.points.length - 1]);
               annCtx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+            } else if (ann.type === 'circle' && ann.points.length > 1) {
+              const start = adjust(ann.points[0]);
+              const end = adjust(ann.points[ann.points.length - 1]);
+              const centerX = (start.x + end.x) / 2;
+              const centerY = (start.y + end.y) / 2;
+              const radiusX = Math.abs(end.x - start.x) / 2;
+              const radiusY = Math.abs(end.y - start.y) / 2;
+              annCtx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+              annCtx.stroke();
             } else if (ann.type === 'arrow' && ann.points.length > 1) {
               const start = adjust(ann.points[0]);
               const end = adjust(ann.points[ann.points.length - 1]);
-              const headlen = 15 * scaleX;
+              const headlen = 15 * strokeScale;
               const angle = Math.atan2(end.y - start.y, end.x - start.x);
               annCtx.moveTo(start.x, start.y);
               annCtx.lineTo(end.x, end.y);
@@ -353,7 +421,7 @@ export default function App() {
               annCtx.stroke();
             } else if (ann.type === 'text' && ann.text) {
               const start = adjust(ann.points[0]);
-              annCtx.font = `${ann.size * 5 * scaleX}px sans-serif`;
+               annCtx.font = `${ann.size * 5 * strokeScale}px sans-serif`;
               annCtx.fillText(ann.text, start.x, start.y);
             }
           });
@@ -383,23 +451,24 @@ export default function App() {
     if (!videoRef.current || !area) return;
 
     const video = videoRef.current;
-    const scaleX = video.videoWidth / video.clientWidth;
-    const scaleY = video.videoHeight / video.clientHeight;
+    const sourceArea = mapSelectedAreaToVideoPixels(area, video);
+    if (!sourceArea) return;
 
     const canvas = document.createElement('canvas');
-    canvas.width = area.width * scaleX;
-    canvas.height = area.height * scaleY;
+    canvas.width = Math.round(sourceArea.width);
+    canvas.height = Math.round(sourceArea.height);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     ctx.drawImage(
       video,
-      area.x * scaleX, area.y * scaleY, area.width * scaleX, area.height * scaleY,
+      sourceArea.x, sourceArea.y, sourceArea.width, sourceArea.height,
       0, 0, canvas.width, canvas.height
     );
 
     const dataUrl = canvas.toDataURL('image/png', 1.0);
     setCapturedImage(dataUrl);
+    setCaptureSize({ width: canvas.width, height: canvas.height });
     setMode('editing');
   };
 
@@ -446,6 +515,12 @@ export default function App() {
 
     setCurrentAnnotation(prev => {
       if (!prev) return null;
+      if (prev.type === 'rect' || prev.type === 'circle' || prev.type === 'arrow') {
+        return {
+          ...prev,
+          points: [prev.points[0], { x, y }]
+        };
+      }
       return {
         ...prev,
         points: [...prev.points, { x, y }]
@@ -478,17 +553,18 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     try {
-      canvas.toBlob(async (blob) => {
-        if (blob) {
-          await navigator.clipboard.write([
-            new ClipboardItem({ 'image/png': blob })
-          ]);
-          setAnnotations([]);
-          setToast('Copied to clipboard!');
-          setButtonFeedback(prev => ({ ...prev, copy: 'Copied' }));
-          setTimeout(() => setButtonFeedback(prev => ({ ...prev, copy: 'Copy' })), 2000);
-        }
-      }, 'image/png');
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob(resolve, 'image/png');
+      });
+      if (!blob) throw new Error('Could not generate image blob.');
+
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': blob })
+      ]);
+      setAnnotations([]);
+      setToast('Copied to clipboard!');
+      setButtonFeedback(prev => ({ ...prev, copy: 'Copied' }));
+      setTimeout(() => setButtonFeedback(prev => ({ ...prev, copy: 'Copy' })), 2000);
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
       setError('Failed to copy to clipboard. Your browser may not support this feature.');
@@ -523,7 +599,7 @@ export default function App() {
         img.src = baseImage;
         img.onload = () => {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           drawAnnotations(ctx, false, canvas.width, canvas.height);
         };
       } else {
@@ -568,6 +644,15 @@ export default function App() {
           const start = ann.points[0];
           const end = ann.points[ann.points.length - 1];
           offCtx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+        } else if (ann.type === 'circle' && ann.points.length > 1) {
+          const start = ann.points[0];
+          const end = ann.points[ann.points.length - 1];
+          const centerX = (start.x + end.x) / 2;
+          const centerY = (start.y + end.y) / 2;
+          const radiusX = Math.abs(end.x - start.x) / 2;
+          const radiusY = Math.abs(end.y - start.y) / 2;
+          offCtx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+          offCtx.stroke();
         } else if (ann.type === 'arrow' && ann.points.length > 1) {
           const start = ann.points[0];
           const end = ann.points[ann.points.length - 1];
@@ -735,8 +820,8 @@ export default function App() {
               <div className="relative shadow-2xl border border-white/10">
                 <canvas 
                   ref={canvasRef}
-                  width={area?.width}
-                  height={area?.height}
+                  width={captureSize?.width ?? 0}
+                  height={captureSize?.height ?? 0}
                   onMouseDown={startAnnotation}
                   onMouseMove={updateAnnotation}
                   onMouseUp={endAnnotation}
@@ -806,6 +891,12 @@ export default function App() {
                       onClick={() => setActiveTool('rect')} 
                       icon={<Square className="w-4 h-4" />} 
                       title="Rectangle"
+                    />
+                    <ToolButton 
+                      active={activeTool === 'circle'} 
+                      onClick={() => setActiveTool('circle')} 
+                      icon={<Circle className="w-4 h-4" />} 
+                      title="Circle"
                     />
                     <ToolButton 
                       active={activeTool === 'arrow'} 
